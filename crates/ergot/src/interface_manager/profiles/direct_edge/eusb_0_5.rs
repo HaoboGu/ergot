@@ -67,6 +67,7 @@ where
     pub async fn run(mut self, frame: &mut [u8], max_usb_frame_size: usize) -> ! {
         assert!(max_usb_frame_size.is_power_of_two());
         loop {
+            info!("Start rx wait enabled");
             self.rx.wait_enabled().await;
             info!("Connection established");
 

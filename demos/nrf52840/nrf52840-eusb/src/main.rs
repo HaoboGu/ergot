@@ -49,6 +49,7 @@ static OUTQ: Queue = kit::Queue::new();
 
 // Define some endpoints
 endpoint!(LedEndpoint, bool, (), "led/set");
+endpoint!(EchoEndpoint, u8, u8, "echo");
 topic!(ButtonPressedTopic, u8, "button/press");
 
 bind_interrupts!(pub struct Irqs {
@@ -106,7 +107,23 @@ async fn main(spawner: Spawner) {
     // USB/RPC INIT
     let driver = usb::Driver::new(p.USBD, Irqs, HardwareVbusDetect::new(Irqs));
     let config = usb_config(ser_buf);
-    let (device, tx_impl, ep_out) = STORAGE.init_ergot(driver, config);
+    let (mut usb_builder, tx_impl, ep_out) = STORAGE.init_without_build(driver, config);
+    static HID_STATE: ::static_cell::StaticCell<::embassy_usb::class::hid::State> = ::static_cell::StaticCell::new();
+    let state= HID_STATE.init(::embassy_usb::class::hid::State::new());
+    // let hid_config = ::embassy_usb::class::hid::Config {
+    //         report_descriptor: &[
+    //         5u8, 1u8, 9u8, 6u8, 161u8, 1u8, 5u8, 7u8, 25u8, 224u8, 41u8, 231u8, 21u8, 0u8, 37u8, 1u8, 117u8, 1u8,
+    //         149u8, 8u8, 129u8, 2u8, 21u8, 0u8, 38u8, 255u8, 0u8, 117u8, 8u8, 149u8, 1u8, 129u8, 3u8, 5u8, 8u8, 25u8,
+    //         1u8, 41u8, 5u8, 37u8, 1u8, 117u8, 1u8, 149u8, 5u8, 145u8, 2u8, 149u8, 3u8, 145u8, 3u8, 5u8, 7u8, 25u8, 0u8,
+    //         41u8, 221u8, 38u8, 255u8, 0u8, 117u8, 8u8, 149u8, 6u8, 129u8, 0u8, 192u8,
+    //     ],
+    //         request_handler: None,
+    //         poll_ms: 1,
+    //         max_packet_size: 64,
+    //     };
+    //     let mut rw: ::embassy_usb::class::hid::HidReaderWriter<_, 1, 8> = ::embassy_usb::class::hid::HidReaderWriter::new(&mut usb_builder, state, hid_config);
+        let mut device = usb_builder.build();
+    // let (device, tx_impl, ep_out) = STORAGE.init_ergot(driver, config);
 
     static RX_BUF: ConstStaticCell<[u8; MAX_PACKET_SIZE]> =
         ConstStaticCell::new([0u8; MAX_PACKET_SIZE]);
@@ -115,7 +132,7 @@ async fn main(spawner: Spawner) {
     spawner.must_spawn(run_tx(tx_impl, OUTQ.framed_consumer()));
     spawner.must_spawn(run_rx(rxvr, RX_BUF.take()));
     spawner.must_spawn(pingserver());
-    spawner.must_spawn(yeeter());
+    // spawner.must_spawn(yeeter());
 
     // Start the led servers first
     let led_pins = [
@@ -132,37 +149,55 @@ async fn main(spawner: Spawner) {
     ];
     let names = ["LED1", "LED2", "LED3", "LED4"];
 
-    for (name, led) in names.iter().zip(led_pins.into_iter()) {
-        spawner.must_spawn(led_server(name, led));
+    loop {
+        embassy_time::Timer::after_secs(1).await;
+        rw.write(&[0,0,0,0,0,0,0,0]).await;
     }
+    // for (name, led) in names.iter().zip(led_pins.into_iter()) {
+    //     spawner.must_spawn(led_server(name, led));
+    // }
 
-    for (name, btn) in names.iter().zip(btn_pins.into_iter()) {
-        spawner.must_spawn(button_worker(btn, name));
-    }
+    // for (name, btn) in names.iter().zip(btn_pins.into_iter()) {
+    //     spawner.must_spawn(button_worker(btn, name));
+    // }
 
     // Then start two tasks that just both listen to every button press event
-    spawner.must_spawn(press_listener(1));
-    spawner.must_spawn(press_listener(2));
+    // spawner.must_spawn(press_listener(1));
+    // spawner.must_spawn(press_listener(2));
 }
 
-topic!(YeetTopic, u64, "topic/yeet");
+// topic!(YeetTopic, u64, "topic/yeet");
 
 #[task]
 async fn pingserver() {
-    STACK.services().ping_handler::<4>().await;
+    // Echo task
+            use core::pin::pin;
+            let socket = STACK.endpoints().bounded_server::<EchoEndpoint, 4>(Some("echoserver"));
+            let socket = pin!(socket);
+            let mut hdl = socket.attach();
+            loop {
+                let _ = hdl
+                    .serve(async |input_num| {
+                        embassy_time::Timer::after_millis(1).await;
+                        info!("Received ergot: {}", input_num);
+                        input_num + 1
+                    })
+                    .await;
+                embassy_time::Timer::after_millis(10).await;
+            }
 }
 
-#[task]
-async fn yeeter() {
-    let mut ctr = 0;
-    Timer::after(Duration::from_secs(3)).await;
-    loop {
-        Timer::after(Duration::from_secs(5)).await;
-        warn!("Sending broadcast message");
-        let _ = STACK.topics().broadcast::<YeetTopic>(&ctr, None);
-        ctr += 1;
-    }
-}
+// #[task]
+// async fn yeeter() {
+//     let mut ctr = 0;
+//     Timer::after(Duration::from_secs(3)).await;
+//     loop {
+//         Timer::after(Duration::from_secs(5)).await;
+//         warn!("Sending broadcast message");
+//         let _ = STACK.topics().broadcast::<YeetTopic>(&ctr, None);
+//         ctr += 1;
+//     }
+// }
 
 /// This handles the low level USB management
 #[embassy_executor::task]
@@ -189,62 +224,62 @@ async fn run_tx(
     .await;
 }
 
-#[task(pool_size = 2)]
-async fn press_listener(idx: u8) {
-    let recv = STACK
-        .topics()
-        .bounded_receiver::<ButtonPressedTopic, 4>(None);
-    let recv = pin!(recv);
-    let mut recv = recv.subscribe();
+// #[task(pool_size = 2)]
+// async fn press_listener(idx: u8) {
+//     let recv = STACK
+//         .topics()
+//         .bounded_receiver::<ButtonPressedTopic, 4>(None);
+//     let recv = pin!(recv);
+//     let mut recv = recv.subscribe();
 
-    loop {
-        let msg = recv.recv().await;
-        defmt::info!("Listener #{=u8}, button {=u8} pressed", idx, msg.t);
-    }
-}
+//     loop {
+//         let msg = recv.recv().await;
+//         defmt::info!("Listener #{=u8}, button {=u8} pressed", idx, msg.t);
+//     }
+// }
 
-#[task(pool_size = 4)]
-async fn led_server(name: &'static str, mut led: Output<'static>) {
-    let socket = STACK
-        .endpoints()
-        .bounded_server::<LedEndpoint, 4>(Some(name));
-    let socket = pin!(socket);
-    let mut hdl = socket.attach();
+// #[task(pool_size = 4)]
+// async fn led_server(name: &'static str, mut led: Output<'static>) {
+//     let socket = STACK
+//         .endpoints()
+//         .bounded_server::<LedEndpoint, 4>(Some(name));
+//     let socket = pin!(socket);
+//     let mut hdl = socket.attach();
 
-    loop {
-        let _ = hdl
-            .serve(async |on| {
-                defmt::info!("{=str} set {=bool}", name, *on);
-                if *on {
-                    led.set_low();
-                } else {
-                    led.set_high();
-                }
-            })
-            .await;
-    }
-}
+//     loop {
+//         let _ = hdl
+//             .serve(async |on| {
+//                 defmt::info!("{=str} set {=bool}", name, *on);
+//                 if *on {
+//                     led.set_low();
+//                 } else {
+//                     led.set_high();
+//                 }
+//             })
+//             .await;
+//     }
+// }
 
-#[task(pool_size = 4)]
-async fn button_worker(mut btn: Input<'static>, name: &'static str) {
-    let client = STACK
-        .endpoints()
-        .client::<LedEndpoint>(Address::unknown(), Some(name));
-    loop {
-        btn.wait_for_low().await;
-        let res = btn
-            .wait_for_high()
-            .with_timeout(Duration::from_millis(5))
-            .await;
-        if res.is_ok() {
-            continue;
-        }
-        client.request(&true).await.unwrap();
-        let _ = STACK.topics().broadcast::<ButtonPressedTopic>(&1, None);
-        btn.wait_for_high().await;
-        client.request(&false).await.unwrap();
-    }
-}
+// #[task(pool_size = 4)]
+// async fn button_worker(mut btn: Input<'static>, name: &'static str) {
+//     let client = STACK
+//         .endpoints()
+//         .client::<LedEndpoint>(Address::unknown(), Some(name));
+//     loop {
+//         btn.wait_for_low().await;
+//         let res = btn
+//             .wait_for_high()
+//             .with_timeout(Duration::from_millis(5))
+//             .await;
+//         if res.is_ok() {
+//             continue;
+//         }
+//         client.request(&true).await.unwrap();
+//         let _ = STACK.topics().broadcast::<ButtonPressedTopic>(&1, None);
+//         btn.wait_for_high().await;
+//         client.request(&false).await.unwrap();
+//     }
+// }
 
 fn get_unique_id() -> u64 {
     let lower = FICR.deviceid(0).read() as u64;

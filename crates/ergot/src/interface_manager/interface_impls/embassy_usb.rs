@@ -367,6 +367,8 @@ pub mod eusb_0_5 {
             let mut alt = interface.alt_setting(0xFF, 0xCA, 0x7D, Some(stindx));
             let ep_out = alt.endpoint_bulk_out(None, 64);
             let ep_in = alt.endpoint_bulk_in(None, 64);
+            info!("EP OPUT:{:?}", ep_out.info());
+            info!("EP IN:{:?}", ep_in.info());
             drop(function);
 
             (builder, ep_in, ep_out)

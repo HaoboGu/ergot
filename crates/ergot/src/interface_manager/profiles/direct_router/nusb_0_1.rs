@@ -90,12 +90,14 @@ impl TxWorker {
                 self.boq.submit(vec![]);
             }
 
+            debug!("sending res");
             let send_res = self.boq.next_complete().await;
             if let Err(e) = send_res.status {
                 error!("Output Queue Error: {e:?}");
                 return;
             }
 
+            debug!("sending zlp {}", needs_zlp);
             if needs_zlp {
                 let send_res = self.boq.next_complete().await;
                 if let Err(e) = send_res.status {

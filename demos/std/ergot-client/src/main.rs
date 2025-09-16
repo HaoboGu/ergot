@@ -10,6 +10,7 @@ use tokio::{net::TcpStream, select};
 use std::{io, pin::pin, time::Duration};
 
 topic!(YeetTopic, u64, "topic/yeet");
+endpoint!(EchoEndpoint, u8, u8, "echo");
 
 #[tokio::main]
 async fn main() -> io::Result<()> {

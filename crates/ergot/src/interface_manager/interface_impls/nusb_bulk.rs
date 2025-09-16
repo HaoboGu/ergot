@@ -56,6 +56,13 @@ pub async fn find_new_devices(devs: &HashSet<DeviceInfo>) -> Vec<NewDevice> {
     trace!("Searching for new devices...");
     let mut out = vec![];
     let devices = nusb::list_devices().unwrap();
+    for device in devices {
+        if device.manufacturer_string() == Some("Haobo") {
+
+        info!("device: {:?}", device);
+        }
+    }
+    let devices = nusb::list_devices().unwrap();
     let devices = devices.filter(coarse_device_filter).collect::<Vec<_>>();
 
     for device in devices {

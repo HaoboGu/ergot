@@ -2,8 +2,8 @@ use ergot::{
     Address,
     toolkits::nusb_v0_1::{RouterStack, find_new_devices, register_router_interface},
     topic,
-    well_known::ErgotPingEndpoint,
 };
+use ergot::endpoint;
 use log::{info, warn};
 use tokio::time::sleep;
 use tokio::time::{interval, timeout};
@@ -19,7 +19,8 @@ const MTU: u16 = 1024;
 const OUT_BUFFER_SIZE: usize = 4096;
 
 // Server
-topic!(YeetTopic, u64, "topic/yeet");
+// topic!(YeetTopic, u64, "topic/yeet");
+endpoint!(EchoEndpoint, u8, u8, "echo");
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -28,15 +29,16 @@ async fn main() -> io::Result<()> {
 
     tokio::task::spawn(ping_all(stack.clone()));
 
-    for i in 1..4 {
-        tokio::task::spawn(yeet_listener(stack.clone(), i));
-    }
+    // for i in 1..4 {
+    //     tokio::task::spawn(yeet_listener(stack.clone(), i));
+    // }
 
     let mut seen = HashSet::new();
 
     loop {
+        info!("Finding new devices");
         let devices = find_new_devices(&HashSet::new()).await;
-
+        info!("Number of devices: {}", devices.len());
         for dev in devices {
             let info = dev.info.clone();
             info!("Found {info:?}, registering");
@@ -44,6 +46,8 @@ async fn main() -> io::Result<()> {
                 .await
                 .unwrap();
             seen.insert(info);
+
+            sleep(Duration::from_secs(30000)).await;
         }
 
         sleep(Duration::from_secs(3)).await;
@@ -61,7 +65,7 @@ async fn ping_all(stack: RouterStack) {
         let nets = stack.manage_profile(|im| im.get_nets());
         info!("Nets to ping: {nets:?}");
         for net in nets {
-            let pg = ctr;
+            let pg = ctr as u8;
             ctr = ctr.wrapping_add(1);
 
             let addr = if let Some(port) = portmap.get(&net) {
@@ -79,30 +83,33 @@ async fn ping_all(stack: RouterStack) {
             };
 
             let start = Instant::now();
-            let rr = stack
+            info!("Pinging {:?}",addr);
+            let res = stack
                 .endpoints()
-                .request_full::<ErgotPingEndpoint>(addr, &pg, None);
-            let fut = timeout(Duration::from_millis(100), rr);
-            let res = fut.await;
+                .request_full::<EchoEndpoint>(addr, &pg, None).await;
+            // let fut = timeout(Duration::from_millis(100), rr);
+            // let res = fut.await;
             let elapsed = start.elapsed();
             warn!("ping {net}.2 w/ {pg}: {res:?}, took: {elapsed:?}");
-            if let Ok(Ok(msg)) = res {
-                assert_eq!(msg.t, pg);
+            if let Ok(msg) = res {
+                info!("Returned message: {:?}", msg);
+                assert_eq!(msg.t, pg + 1);
                 portmap.insert(net, msg.hdr.src.port_id);
             } else {
+                log::error!("Req failed");
                 portmap.remove(&net);
             }
         }
     }
 }
 
-async fn yeet_listener(stack: RouterStack, id: u8) {
-    let subber = stack.topics().heap_bounded_receiver::<YeetTopic>(64, None);
-    let subber = pin!(subber);
-    let mut hdl = subber.subscribe();
+// async fn yeet_listener(stack: RouterStack, id: u8) {
+//     let subber = stack.topics().heap_bounded_receiver::<YeetTopic>(64, None);
+//     let subber = pin!(subber);
+//     let mut hdl = subber.subscribe();
 
-    loop {
-        let msg = hdl.recv().await;
-        info!("{}: Listener id:{id} got {}", msg.hdr, msg.t);
-    }
-}
+//     loop {
+//         let msg = hdl.recv().await;
+//         info!("{}: Listener id:{id} got {}", msg.hdr, msg.t);
+//     }
+// }
